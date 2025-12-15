@@ -13,31 +13,53 @@ import { getXData } from "./get-x-data";
 
 export const app = new Hono();
 
-const rateLimiter = createRateLimiter({
-  requestsPerSecond: 2,
+// Limiter for concurrent scraping jobs (system resources)
+const jobLimiter = createRateLimiter({
   maxConcurrent: 5,
+  requestsPerSecond: 100, // High limit, effectively just semaphore
+  timeout: 600000, // 10 minutes for a job
+  onQueueChange: (queueSize) => {
+    if (queueSize > 0) {
+      console.log(`[JobLimiter] Queue size: ${queueSize}`);
+    }
+  },
+});
+
+// Limiter for Nitter API requests (rate limits)
+const nitterLimiter = createRateLimiter({
+  requestsPerSecond: 2,
+  maxConcurrent: 2, // Per session limit
   maxRetries: 3,
   retryDelay: 2000,
   timeout: 120000,
   onError: (error, retries) => {
-    console.error(`[RateLimiter] Error (retry ${retries}):`, error.message);
+    console.error(`[NitterLimiter] Error (retry ${retries}):`, error.message);
   },
   onSuccess: (duration) => {
-    console.log(`[RateLimiter] Request completed in ${duration}ms`);
+    console.log(`[NitterLimiter] Request completed in ${duration}ms`);
   },
   onQueueChange: (queueSize) => {
     if (queueSize > 0) {
-      console.log(`[RateLimiter] Queue size: ${queueSize}`);
+      console.log(`[NitterLimiter] Queue size: ${queueSize}`);
     }
   },
 });
 
 app.get("/metrics", (c) => {
-  const metrics = rateLimiter.getMetrics();
+  const nitterMetrics = nitterLimiter.getMetrics();
+  const jobMetrics = jobLimiter.getMetrics();
+
   return c.json({
-    ...metrics,
-    queueSize: rateLimiter.getQueueSize(),
-    activeRequests: rateLimiter.getActiveRequests(),
+    nitter: {
+      ...nitterMetrics,
+      queueSize: nitterLimiter.getQueueSize(),
+      activeRequests: nitterLimiter.getActiveRequests(),
+    },
+    jobs: {
+      ...jobMetrics,
+      queueSize: jobLimiter.getQueueSize(),
+      activeRequests: jobLimiter.getActiveRequests(),
+    },
   });
 });
 
@@ -50,11 +72,12 @@ app.get("/:username", async (c) => {
   const maxRetries = Number(c.req.query("maxRetries") || MAX_RETRIES);
 
   try {
-    const data = await rateLimiter.execute(async () => {
+    const data = await jobLimiter.execute(async () => {
       return await getXData(username, {
         postsLimit,
         delayBetweenPages,
         maxRetries,
+        rateLimiter: nitterLimiter,
       });
     }, 1);
 

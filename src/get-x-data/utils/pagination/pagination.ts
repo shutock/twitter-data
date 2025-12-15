@@ -7,6 +7,7 @@ type PageInfo = {
   itemCount: number;
   hasLink: boolean;
   linkHref: string | null;
+  linkText: string | null;
 };
 
 type NavigationConfig = {
@@ -20,8 +21,20 @@ type NavigationConfig = {
 export const getPageInfo = async (page: Page): Promise<PageInfo> => {
   return await page.evaluate(() => {
     const doc = (globalThis as any).document;
-    const showMoreDivs = doc.querySelectorAll(".timeline .show-more");
-    const showMoreDiv = showMoreDivs[showMoreDivs.length - 1];
+    const showMoreDivs = Array.from(
+      doc.querySelectorAll(".timeline .show-more"),
+    ) as any[];
+
+    // Prioritize finding a link with "cursor="
+    const cursorDiv = showMoreDivs
+      .slice()
+      .reverse()
+      .find((div) => {
+        const href = div.querySelector("a")?.getAttribute("href");
+        return href && href.includes("cursor=");
+      });
+
+    const showMoreDiv = cursorDiv || showMoreDivs[showMoreDivs.length - 1];
     const timelineItems = doc.querySelectorAll(".timeline .timeline-item");
     const link = showMoreDiv?.querySelector("a");
     return {
@@ -29,6 +42,7 @@ export const getPageInfo = async (page: Page): Promise<PageInfo> => {
       itemCount: timelineItems.length,
       hasLink: !!link,
       linkHref: link?.getAttribute("href") || null,
+      linkText: link?.innerText || null,
     };
   });
 };
@@ -56,7 +70,7 @@ export const shouldStopPagination = (
 
   if (pageInfo.linkHref === `/${username}` || pageInfo.linkHref === username) {
     if (ora) {
-      ora.text = `Pagination stopped: link-to-profile (${currentCount}/${totalLimit})`;
+      ora.text = `Pagination stopped: link-to-profile (text="${pageInfo.linkText}") (${currentCount}/${totalLimit})`;
     }
     return true;
   }
@@ -69,25 +83,6 @@ export const shouldStopPagination = (
   }
 
   return false;
-};
-
-export const applyRateLimitDelay = async (
-  delayBetweenPages: number,
-  ora?: Ora,
-  currentCount = 0,
-  totalLimit = 0,
-): Promise<void> => {
-  const randomDelay = random(
-    delayBetweenPages * 0.8,
-    delayBetweenPages * 1.5,
-    false,
-  );
-
-  if (ora) {
-    ora.text = `Rate limit delay (${Math.round(randomDelay)}ms)... (${currentCount}/${totalLimit})`;
-  }
-
-  await new Promise((resolve) => setTimeout(resolve, randomDelay));
 };
 
 export const navigateToNextPage = async (
@@ -109,7 +104,16 @@ export const navigateToNextPage = async (
   while (!navigationSuccess && retryCount < maxRetries) {
     try {
       const currentUrl = page.url();
-      const nextUrl = new URL(pageInfo.linkHref, currentUrl).toString();
+      let nextUrl: string;
+
+      try {
+        nextUrl = new URL(pageInfo.linkHref, currentUrl).toString();
+      } catch (urlError) {
+        if (ora) {
+          ora.text = `Invalid URL construction: href="${pageInfo.linkHref}", base="${currentUrl}" (${currentCount}/${totalLimit})`;
+        }
+        return false;
+      }
 
       if (retryCount > 0) {
         const baseBackoff = delayBetweenPages * Math.pow(2, retryCount);
@@ -125,7 +129,7 @@ export const navigateToNextPage = async (
 
       await page.goto(nextUrl, {
         waitUntil: "domcontentloaded",
-        timeout: 30000,
+        timeout: 60000,
       });
 
       await page.waitForSelector(".timeline .timeline-item", {
@@ -139,7 +143,8 @@ export const navigateToNextPage = async (
       retryCount++;
       if (retryCount >= maxRetries) {
         if (ora) {
-          ora.text = `Pagination stopped after ${maxRetries} retries: ${error instanceof Error ? error.message : "unknown"} (${currentCount}/${totalLimit})`;
+          const errorMsg = error instanceof Error ? error.message : "unknown";
+          ora.text = `Pagination stopped after ${maxRetries} retries: ${errorMsg} at ${page.url()} (${currentCount}/${totalLimit})`;
         }
         break;
       }

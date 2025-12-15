@@ -3,9 +3,11 @@ import { type Ora } from "ora";
 import { type Browser } from "puppeteer";
 import { z } from "zod";
 
+import type { RateLimiter } from "~/src/lib/rate-limiter";
+import { createRateLimiter } from "~/src/lib/rate-limiter";
+
 import { schema } from "./schema";
 import {
-  applyRateLimitDelay,
   BrowserError,
   createBrowser,
   createPage,
@@ -27,6 +29,8 @@ type GetDataOptions = {
   ora?: Ora;
   delayBetweenPages?: number;
   maxRetries?: number;
+  rateLimiter?: RateLimiter;
+  sessionId?: string;
 };
 
 type InternalGetDataOptions = {
@@ -34,6 +38,8 @@ type InternalGetDataOptions = {
   ora?: Ora;
   delayBetweenPages: number;
   maxRetries: number;
+  rateLimiter: RateLimiter;
+  sessionId?: string;
 };
 
 type TweetCollectionState = {
@@ -86,12 +92,25 @@ const collectTweetsFromPage = async (
   username: string,
   options: InternalGetDataOptions,
 ): Promise<any> => {
-  const { postsLimit, ora, delayBetweenPages, maxRetries } = options;
+  const {
+    postsLimit,
+    ora,
+    delayBetweenPages,
+    maxRetries,
+    rateLimiter,
+    sessionId = "default",
+  } = options;
   const url = new URL(username, baseURL).toString();
 
   let page;
   try {
     page = await createPage(browser);
+
+    page.on("response", (response) => {
+      const headers = response.headers();
+      rateLimiter.updateRateLimit(sessionId, headers);
+    });
+
     await navigateToPage(page, url);
   } catch (error) {
     throw new BrowserError("Failed to create or navigate page", error);
@@ -132,20 +151,18 @@ const collectTweetsFromPage = async (
         break;
       }
 
-      await applyRateLimitDelay(
-        delayBetweenPages,
-        ora,
-        state.allTweets.length,
-        postsLimit,
+      const navigationSuccess = await rateLimiter.execute(
+        () =>
+          navigateToNextPage(page, {
+            delayBetweenPages,
+            maxRetries,
+            ora,
+            currentCount: state.allTweets.length,
+            totalLimit: postsLimit,
+          }),
+        0,
+        sessionId,
       );
-
-      const navigationSuccess = await navigateToNextPage(page, {
-        delayBetweenPages,
-        maxRetries,
-        ora,
-        currentCount: state.allTweets.length,
-        totalLimit: postsLimit,
-      });
 
       if (!navigationSuccess) break;
 
@@ -176,7 +193,15 @@ export const getXData = async (
     postsLimit = 100,
     delayBetweenPages = 2000,
     maxRetries = 3,
+    sessionId,
   } = options;
+
+  const rateLimiter =
+    options.rateLimiter ||
+    createRateLimiter({
+      requestsPerSecond: 1000 / delayBetweenPages,
+      timeout: 300000, // 5 minutes to allow for retries
+    });
 
   const url = new URL(username, baseURL).toString();
   ora?.start(`Fetching ${url}`);
@@ -191,6 +216,8 @@ export const getXData = async (
       ora,
       delayBetweenPages,
       maxRetries,
+      rateLimiter,
+      sessionId,
     });
 
     const parsed = schema.parse(data);
@@ -200,5 +227,8 @@ export const getXData = async (
     throw error;
   } finally {
     await browser?.close();
+    if (!options.rateLimiter) {
+      rateLimiter.destroy();
+    }
   }
 };

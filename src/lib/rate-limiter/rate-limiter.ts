@@ -7,6 +7,7 @@ type QueueItem<T> = {
   retries: number;
   priority: number;
   timestamp: number;
+  sessionId?: string;
 };
 
 type RateLimiterConfig = {
@@ -20,6 +21,17 @@ type RateLimiterConfig = {
   onQueueChange?: (queueSize: number) => void;
 };
 
+type SessionState = {
+  id: string;
+  tokens: number;
+  activeRequests: number;
+  remaining: number;
+  reset: number;
+  isLimited: boolean;
+  nextAvailableTime: number;
+  requestsPerSecond: number; // Dynamic based on headers
+};
+
 type RateLimiterMetrics = {
   totalRequests: number;
   successfulRequests: number;
@@ -29,11 +41,11 @@ type RateLimiterMetrics = {
   currentQueueSize: number;
   activeRequests: number;
   lastRequestTime: number;
+  sessionCount: number;
 };
 
 export class RateLimiter {
   private queue: QueueItem<any>[] = [];
-  private activeRequests = 0;
   private metrics: RateLimiterMetrics = {
     totalRequests: 0,
     successfulRequests: 0,
@@ -43,13 +55,15 @@ export class RateLimiter {
     currentQueueSize: 0,
     activeRequests: 0,
     lastRequestTime: 0,
+    sessionCount: 0,
   };
 
   private config: Required<RateLimiterConfig>;
+  private sessions: Map<string, SessionState> = new Map();
+  private defaultSessionId = "default";
+
   private processQueue: () => void;
   private isProcessing = false;
-  private tokens: number = 0;
-  private capacity: number = 0;
   private refillIntervalMs: number = 1000;
   private refillTimer: any;
 
@@ -65,21 +79,94 @@ export class RateLimiter {
       onQueueChange: config.onQueueChange ?? (() => {}),
     };
 
-    const throttleDelay = Math.ceil(1000 / this.config.requestsPerSecond);
+    // Initialize default session
+    this.createSession(this.defaultSessionId);
+
+    const throttleDelay = 100; // Fast check loop
     this.processQueue = throttle(this._processQueue.bind(this), throttleDelay, {
       leading: true,
       trailing: true,
     });
 
-    this.capacity = this.config.requestsPerSecond;
-    this.tokens = this.capacity;
     this.refillTimer = setInterval(() => {
-      this.tokens = Math.min(this.tokens + this.capacity, this.capacity);
+      this.refillTokens();
       this.processQueue();
     }, this.refillIntervalMs);
   }
 
-  async execute<T>(fn: () => Promise<T>, priority: number = 0): Promise<T> {
+  private createSession(id: string) {
+    if (!this.sessions.has(id)) {
+      this.sessions.set(id, {
+        id,
+        tokens: this.config.requestsPerSecond, // Start with full tokens
+        activeRequests: 0,
+        remaining: 100, // Default assumption
+        reset: Date.now() / 1000 + 900,
+        isLimited: false,
+        nextAvailableTime: 0,
+        requestsPerSecond: this.config.requestsPerSecond,
+      });
+      this.metrics.sessionCount++;
+    }
+  }
+
+  private refillTokens() {
+    const now = Date.now();
+    for (const session of this.sessions.values()) {
+      // Logic: targetPerSec = allowedPerSec * 0.7
+      // We assume refill is called every 1s, so we add requestsPerSecond tokens
+
+      // Calculate burst cap: min(remaining, 5)
+      const burstCap = Math.min(session.remaining, 5);
+
+      // Refill
+      session.tokens = Math.min(
+        session.tokens + session.requestsPerSecond,
+        burstCap,
+      );
+
+      // Check if limited state expired
+      if (session.isLimited && now >= session.nextAvailableTime) {
+        session.isLimited = false;
+      }
+    }
+  }
+
+  updateRateLimit(sessionId: string, headers: Record<string, string>) {
+    const session = this.sessions.get(sessionId || this.defaultSessionId);
+    if (!session) return;
+
+    const remaining = parseInt(headers["x-rate-limit-remaining"] || "", 10);
+    const reset = parseInt(headers["x-rate-limit-reset"] || "", 10);
+
+    if (!isNaN(remaining)) session.remaining = remaining;
+    if (!isNaN(reset)) session.reset = reset;
+
+    if (!isNaN(remaining) && !isNaN(reset)) {
+      const nowEpoch = Date.now() / 1000;
+      const windowSeconds = Math.max(reset - nowEpoch, 1);
+      const allowedPerSec = remaining / windowSeconds;
+      // Safety factor 0.7
+      session.requestsPerSecond = allowedPerSec * 0.7;
+
+      // If remaining is very low, mark as limited or reduce rate significantly
+      if (remaining <= 10 && reset > nowEpoch) {
+        // "If remaining <= 10 and reset > now, prefer not to use that session"
+        // We can enforce this by setting tokens to 0 or pausing
+        // But let's just let the token bucket handle it (it will be slow)
+        // or we can explicitly delay.
+      }
+    }
+  }
+
+  async execute<T>(
+    fn: () => Promise<T>,
+    priority: number = 0,
+    sessionId?: string,
+  ): Promise<T> {
+    const targetSessionId = sessionId || this.defaultSessionId;
+    this.createSession(targetSessionId);
+
     return new Promise<T>((resolve, reject) => {
       const item: QueueItem<T> = {
         fn,
@@ -88,6 +175,7 @@ export class RateLimiter {
         retries: 0,
         priority,
         timestamp: Date.now(),
+        sessionId: targetSessionId,
       };
 
       this.queue.push(item);
@@ -109,22 +197,73 @@ export class RateLimiter {
     if (this.isProcessing) return;
     this.isProcessing = true;
 
-    while (
-      this.queue.length > 0 &&
-      this.activeRequests < this.config.maxConcurrent
-    ) {
-      if (this.tokens <= 0) {
-        break;
-      }
+    // Iterate through queue and find executable items
+    // We can't just shift() because the head item might be blocked by its session
+    // while a later item might be runnable on a different session.
+    // However, for strict priority, we should block.
+    // But usually we want throughput. Let's try to pick first runnable item.
+
+    const unhandledItems: QueueItem<any>[] = [];
+
+    while (this.queue.length > 0) {
       const item = this.queue.shift();
       if (!item) break;
 
-      this.metrics.currentQueueSize = this.queue.length;
-      this.config.onQueueChange(this.queue.length);
+      const session = this.sessions.get(
+        item.sessionId || this.defaultSessionId,
+      );
 
-      this.tokens--;
-      this.executeItem(item);
+      if (!session) {
+        // Should not happen as we create on execute
+        unhandledItems.push(item);
+        continue;
+      }
+
+      // Check constraints
+      const now = Date.now();
+
+      // 1. Session Limited / Backoff
+      if (session.isLimited && now < session.nextAvailableTime) {
+        unhandledItems.push(item);
+        continue;
+      }
+
+      // 2. Per-session Concurrency
+      const perSessionLimit = this.config.maxConcurrent;
+      if (session.activeRequests >= perSessionLimit) {
+        unhandledItems.push(item);
+        continue;
+      }
+
+      // 3. Tokens
+      if (session.tokens < 1) {
+        unhandledItems.push(item);
+        continue;
+      }
+
+      // 4. "If remaining <= 10 and reset > now, prefer not to use"
+      // We implement this as a soft block
+      if (session.remaining <= 10 && session.reset > now / 1000) {
+        // Only allow if we really have to? Or just block.
+        // User says "prefer not to use... do not queue new ones".
+        // We already queued it. Let's block it.
+        unhandledItems.push(item);
+        continue;
+      }
+
+      // Runnable
+      session.tokens -= 1;
+      this.executeItem(item, session);
     }
+
+    // Put back unhandled items
+    // This reordering might violate strict priority if we skip items.
+    // But it's necessary for multi-session fairness.
+    // To preserve order of unhandled items:
+    this.queue = [...unhandledItems, ...this.queue];
+
+    this.metrics.currentQueueSize = this.queue.length;
+    this.config.onQueueChange(this.queue.length);
 
     this.isProcessing = false;
 
@@ -133,9 +272,12 @@ export class RateLimiter {
     }
   }
 
-  private async executeItem<T>(item: QueueItem<T>): Promise<void> {
-    this.activeRequests++;
-    this.metrics.activeRequests = this.activeRequests;
+  private async executeItem<T>(
+    item: QueueItem<T>,
+    session: SessionState,
+  ): Promise<void> {
+    session.activeRequests++;
+    this.metrics.activeRequests++; // Global active (fix: this.activeRequests property was removed in class, use metrics)
     this.metrics.totalRequests++;
 
     const startTime = Date.now();
@@ -158,11 +300,11 @@ export class RateLimiter {
       this.config.onSuccess(duration);
 
       item.resolve(result);
-    } catch (error) {
-      await this.handleError(item, error, startTime);
+    } catch (error: any) {
+      await this.handleError(item, error, startTime, session);
     } finally {
-      this.activeRequests--;
-      this.metrics.activeRequests = this.activeRequests;
+      session.activeRequests--;
+      this.metrics.activeRequests--;
       this.processQueue();
     }
   }
@@ -171,18 +313,47 @@ export class RateLimiter {
     item: QueueItem<T>,
     error: any,
     startTime: number,
+    session: SessionState,
   ): Promise<void> {
     const duration = Date.now() - startTime;
     this.updateAverageResponseTime(duration);
+
+    // Check for 429 or RateLimitError
+    const isRateLimit =
+      error?.message?.includes("429") ||
+      error?.status === 429 ||
+      error?.name === "RateLimitError";
+
+    if (isRateLimit) {
+      session.isLimited = true;
+      // Jitter 0-10s + Reset time
+      // If we have reset time, use it. Else default to 1 min?
+      const nowSeconds = Date.now() / 1000;
+      let waitSeconds =
+        session.reset > nowSeconds ? session.reset - nowSeconds : 60;
+      waitSeconds += Math.random() * 10; // Jitter
+
+      session.nextAvailableTime = Date.now() + waitSeconds * 1000;
+
+      // Don't retry immediately, put back in queue?
+      // User says: "Immediately stop using that session... Wait until resetEpoch + jitter"
+      // The item failed. Should we retry it? Yes, "exponential backoff for retries of the same job"
+    }
 
     if (item.retries < this.config.maxRetries) {
       item.retries++;
       this.metrics.retriedRequests++;
 
-      const backoffDelay =
+      const baseBackoff =
         this.config.retryDelay * Math.pow(2, item.retries - 1);
-      const jitter = Math.random() * 0.3 * backoffDelay;
-      const delay = backoffDelay + jitter;
+      const jitter = Math.random() * 0.2 * baseBackoff; // +/- 20%
+      let delay = baseBackoff + jitter;
+
+      if (isRateLimit) {
+        // If rate limited, the delay is already handled by session.nextAvailableTime check in processQueue
+        // But we should push it back to queue.
+        delay = 0; // It will just sit in queue until session is ready
+      }
 
       this.config.onError(
         error instanceof Error ? error : new Error(String(error)),
@@ -191,7 +362,7 @@ export class RateLimiter {
 
       await new Promise((resolve) => setTimeout(resolve, delay));
 
-      this.queue.unshift(item);
+      this.queue.unshift(item); // Re-queue at front
       this.metrics.currentQueueSize = this.queue.length;
       this.config.onQueueChange(this.queue.length);
     } else {
@@ -225,7 +396,7 @@ export class RateLimiter {
   }
 
   getActiveRequests(): number {
-    return this.activeRequests;
+    return this.metrics.activeRequests;
   }
 
   clearQueue(): void {
@@ -240,9 +411,17 @@ export class RateLimiter {
   }
 
   async waitForCompletion(): Promise<void> {
-    while (this.queue.length > 0 || this.activeRequests > 0) {
+    while (this.queue.length > 0 || this.metrics.activeRequests > 0) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+  }
+
+  destroy(): void {
+    if (this.refillTimer) {
+      clearInterval(this.refillTimer);
+      this.refillTimer = undefined;
+    }
+    this.clearQueue();
   }
 }
 

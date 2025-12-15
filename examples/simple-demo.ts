@@ -4,8 +4,8 @@ import ora from "ora";
 
 import { getXData } from "~/src/get-x-data";
 
-const username = "spacex";
-const postsLimit = 200;
+const username = "0xNomis";
+const postsLimit = 1000;
 const delayBetweenPages = 4000;
 const maxRetries = 3;
 
@@ -33,4 +33,6 @@ try {
 } catch (error) {
   const message = error instanceof Error ? error.message : "Unknown error";
   loader.fail(message);
+} finally {
+  process.exit(0);
 }
