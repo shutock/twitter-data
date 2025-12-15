@@ -10,8 +10,8 @@ export const getData = async (
   username: string,
   { ora, postsLimit = 100 }: { postsLimit?: number; ora?: Ora },
 ) => {
-  let currentUrl = new URL(username, baseURL).toString();
-  ora?.start(`Fetching ${currentUrl}`);
+  const url = new URL(username, baseURL).toString();
+  ora?.start(`Fetching ${url}`);
 
   let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
   try {
@@ -36,20 +36,22 @@ export const getData = async (
       else req.continue();
     });
 
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    await page.waitForFunction(
+      () => (globalThis as any).document?.body?.children?.length > 0,
+      { timeout: 30000 },
+    );
+
     const allTweets: any[] = [];
+    const seenUrls = new Set<string>();
     let profile: any;
     let stats: any;
+    let consecutiveNoNewTweets = 0;
 
     while (allTweets.length < postsLimit) {
-      await page.goto(currentUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 30000,
-      });
-      await page.waitForFunction(
-        () => (globalThis as any).document?.body?.children?.length > 0,
-        { timeout: 30000 },
-      );
-
       let html = await page.evaluate(
         () => (globalThis as any).document?.body?.outerHTML || "",
       );
@@ -57,11 +59,6 @@ export const getData = async (
       if (!html || html.trim().length === 0) {
         html = await page.content();
       }
-
-      // const outDir = path.join(process.cwd(), "out");
-      // await fs.mkdir(outDir, { recursive: true });
-      // const filePath = path.join(outDir, `${username}.html`);
-      // await fs.writeFile(filePath, html, "utf8");
 
       const $ = cheerio.load(html);
       const abs = (u?: string | null) => {
@@ -222,15 +219,118 @@ export const getData = async (
         })
         .get();
 
-      allTweets.push(...tweets.filter((t) => t !== null));
+      const newTweets = (tweets as any[]).filter(
+        (tweet) => tweet && !seenUrls.has(tweet.url),
+      );
+      newTweets.forEach((tweet) => {
+        seenUrls.add(tweet.url);
+      });
 
-      const cursor = $(".show-more a").attr("href");
-      if (cursor && allTweets.length < postsLimit) {
-        currentUrl = new URL(cursor, currentUrl).toString();
-        if (ora)
-          ora.text = `Fetching ${currentUrl} (Collected ${allTweets.length})`;
-      } else {
+      allTweets.push(...newTweets);
+
+      if (allTweets.length >= postsLimit) {
         break;
+      }
+
+      if (newTweets.length === 0) {
+        consecutiveNoNewTweets++;
+        if (consecutiveNoNewTweets >= 3) {
+          break;
+        }
+      } else {
+        consecutiveNoNewTweets = 0;
+      }
+
+      const pageInfo = await page.evaluate(() => {
+        const doc = (globalThis as any).document;
+        const showMoreDivs = doc.querySelectorAll(".timeline .show-more");
+        const showMoreDiv = showMoreDivs[showMoreDivs.length - 1];
+        const timelineItems = doc.querySelectorAll(".timeline .timeline-item");
+        const link = showMoreDiv?.querySelector("a");
+        return {
+          hasShowMore: !!showMoreDiv,
+          itemCount: timelineItems.length,
+          hasLink: !!link,
+          linkHref: link?.getAttribute("href") || null,
+        };
+      });
+
+      if (ora) {
+        ora.text = `Page check: showMore=${pageInfo.hasShowMore}, link=${pageInfo.hasLink}, href=${pageInfo.linkHref}, items=${pageInfo.itemCount} (${allTweets.length}/${postsLimit})`;
+      }
+
+      if (!pageInfo.hasShowMore) {
+        if (ora) {
+          ora.text = `Pagination stopped: no-show-more-div, items=${pageInfo.itemCount} (${allTweets.length}/${postsLimit})`;
+        }
+        break;
+      }
+
+      if (!pageInfo.linkHref) {
+        if (ora) {
+          ora.text = `Pagination stopped: no-link-href (${allTweets.length}/${postsLimit})`;
+        }
+        break;
+      }
+
+      if (
+        pageInfo.linkHref === `/${username}` ||
+        pageInfo.linkHref === username
+      ) {
+        if (ora) {
+          ora.text = `Pagination stopped: link-to-profile (${allTweets.length}/${postsLimit})`;
+        }
+        break;
+      }
+
+      let navigationSuccess = false;
+      let retryCount = 0;
+      const maxRetries = 3;
+
+      while (!navigationSuccess && retryCount < maxRetries) {
+        try {
+          const currentUrl = page.url();
+          const nextUrl = new URL(pageInfo.linkHref, currentUrl).toString();
+
+          if (retryCount > 0) {
+            const backoffDelay = Math.min(
+              1000 * Math.pow(2, retryCount),
+              10000,
+            );
+            if (ora) {
+              ora.text = `Retrying navigation (${retryCount}/${maxRetries}) after ${backoffDelay}ms... (${allTweets.length}/${postsLimit})`;
+            }
+            await new Promise((resolve) => setTimeout(resolve, backoffDelay));
+          }
+
+          await page.goto(nextUrl, {
+            waitUntil: "domcontentloaded",
+            timeout: 30000,
+          });
+
+          await page.waitForSelector(".timeline .timeline-item", {
+            timeout: 15000,
+          });
+
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          navigationSuccess = true;
+        } catch (error) {
+          retryCount++;
+          if (retryCount >= maxRetries) {
+            if (ora) {
+              ora.text = `Pagination stopped after ${maxRetries} retries: ${error instanceof Error ? error.message : "unknown"} (${allTweets.length}/${postsLimit})`;
+            }
+            break;
+          }
+        }
+      }
+
+      if (!navigationSuccess) {
+        break;
+      }
+
+      if (ora) {
+        ora.text = `Loading more tweets... (${allTweets.length}/${postsLimit})`;
       }
     }
 
@@ -240,7 +340,6 @@ export const getData = async (
       tweets: allTweets.slice(0, postsLimit),
     });
 
-    // ora?.succeed(`Saved body HTML to ${filePath}`);
     return parsed;
   } catch (error) {
     ora?.fail("Failed to fetch page");

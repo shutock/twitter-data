@@ -4,12 +4,13 @@ import ora from "ora";
 
 import { getData } from "./src";
 
-const username = "eeftp";
+const username = "unchase12";
+const postsLimit = 500;
 
 const loader = ora("Loading data...").start();
 
 try {
-  const data = await getData(username, { ora: loader });
+  const data = await getData(username, { ora: loader, postsLimit });
 
   loader.text = "Got data";
 
@@ -18,6 +19,8 @@ try {
 
   const outFile = path.join(outDir, `${username}.json`);
   await fs.writeFile(outFile, JSON.stringify(data, null, 2), "utf8");
+
+  console.log("\ngot", data.tweets.length, "/", postsLimit);
 
   loader.succeed(`Data saved to ${outFile}`);
 } catch (error) {
