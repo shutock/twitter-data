@@ -2,17 +2,17 @@ import { promises as fs } from "fs";
 import path from "path";
 import ora from "ora";
 
-import { getData } from "./src";
+import { getXData } from "~/src/get-x-data";
 
 const username = "unchase12";
-const postsLimit = 500;
+const postsLimit = 200;
 const delayBetweenPages = 4000;
 const maxRetries = 3;
 
 const loader = ora("Loading data...").start();
 
 try {
-  const data = await getData(username, {
+  const data = await getXData(username, {
     ora: loader,
     postsLimit,
     delayBetweenPages,

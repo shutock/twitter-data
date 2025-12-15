@@ -1,6 +1,6 @@
-import { app } from "./src";
+import { app } from "~/src";
 
 export default {
-  port: Number(process.env.PORT || 3000),
+  port: Number(process.env.PORT || 1337),
   fetch: app.fetch,
 };
