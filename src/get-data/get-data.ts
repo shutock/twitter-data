@@ -6,8 +6,10 @@ import { schema } from "./schema";
 
 const baseURL = "https://nitter.net";
 
-export const getData = async (username: string, ora?: Ora) => {
-  const POSTS_LIMIT = 100;
+export const getData = async (
+  username: string,
+  { ora, postsLimit = 100 }: { postsLimit?: number; ora?: Ora }
+) => {
   let currentUrl = new URL(username, baseURL).toString();
   ora?.start(`Fetching ${currentUrl}`);
 
@@ -38,7 +40,7 @@ export const getData = async (username: string, ora?: Ora) => {
     let profile: any;
     let stats: any;
 
-    while (allTweets.length < POSTS_LIMIT) {
+    while (allTweets.length < postsLimit) {
       await page.goto(currentUrl, {
         waitUntil: "domcontentloaded",
         timeout: 30000,
@@ -223,7 +225,7 @@ export const getData = async (username: string, ora?: Ora) => {
       allTweets.push(...tweets.filter((t) => t !== null));
 
       const cursor = $(".show-more a").attr("href");
-      if (cursor && allTweets.length < POSTS_LIMIT) {
+      if (cursor && allTweets.length < postsLimit) {
         currentUrl = new URL(cursor, currentUrl).toString();
         if (ora)
           ora.text = `Fetching ${currentUrl} (Collected ${allTweets.length})`;
@@ -235,7 +237,7 @@ export const getData = async (username: string, ora?: Ora) => {
     const parsed = schema.parse({
       profile,
       stats,
-      tweets: allTweets.slice(0, POSTS_LIMIT),
+      tweets: allTweets.slice(0, postsLimit),
     });
 
     // ora?.succeed(`Saved body HTML to ${filePath}`);

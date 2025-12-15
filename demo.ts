@@ -9,7 +9,7 @@ const username = "eeftp";
 const loader = ora("Loading data...").start();
 
 try {
-  const data = await getData(username, loader);
+  const data = await getData(username, { ora: loader });
 
   loader.text = "Got data";
 
