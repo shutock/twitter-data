@@ -6,12 +6,17 @@ import { z } from "zod";
 import { BrowserPool } from "~/src/lib/browser-pool";
 import {
   BROWSER_POOL_SIZE,
+  INSTANCE_RETRY_DELAY_MS,
+  MAX_INSTANCE_RETRIES,
   NITTER_HEALTH_CHECK_INTERVAL,
+  PARTIAL_RESULTS_MIN_THRESHOLD,
   RATE_LIMITER_MAX_CONCURRENT,
   RATE_LIMITER_MAX_RETRIES,
   RATE_LIMITER_REQUESTS_PER_SECOND,
   RATE_LIMITER_RETRY_DELAY,
   RATE_LIMITER_TIMEOUT,
+  SAVE_TO_FILE,
+  SCRAPING_TIMEOUT_MS,
 } from "~/src/lib/constants";
 import { NitterInstancePool } from "~/src/lib/nitter-pool";
 import { createRateLimiter } from "~/src/lib/rate-limiter";
@@ -105,6 +110,22 @@ app.get("/metrics", (c) => {
   });
 });
 
+// Helper: Save to file if enabled (async, non-blocking)
+async function saveToFileIfEnabled(username: string, data: any): Promise<void> {
+  if (!SAVE_TO_FILE) return;
+
+  const outDir = path.join(process.cwd(), "out");
+  const outFile = path.join(outDir, `${username}.json`);
+
+  // Fire-and-forget async save
+  fs.mkdir(outDir, { recursive: true })
+    .then(() => fs.writeFile(outFile, JSON.stringify(data, null, 2), "utf8"))
+    .then(() => console.log(`[App] Saved ${username}.json`))
+    .catch((err) =>
+      console.error(`[App] Failed to save ${username}.json:`, err),
+    );
+}
+
 // Request validation schema
 const querySchema = z.object({
   postsLimit: z.coerce.number().min(1).max(5000).default(100),
@@ -112,13 +133,32 @@ const querySchema = z.object({
   maxRetries: z.coerce.number().min(1).max(10).default(3),
 });
 
+// Username validation schema
+const usernameSchema = z
+  .string()
+  .min(1, "Username too short")
+  .max(15, "Username too long (max 15 chars)")
+  .regex(
+    /^[a-zA-Z0-9_]+$/,
+    "Username can only contain letters, numbers, and underscores",
+  );
+
 app.get("/x-data/:username", async (c) => {
   const username = c.req.param("username");
 
-  // Validate username
-  if (!username || username.length < 1 || username.length > 50) {
-    return c.json({ error: "Invalid username" }, 400);
+  // Validate username with proper pattern
+  const usernameResult = usernameSchema.safeParse(username);
+  if (!usernameResult.success) {
+    return c.json(
+      {
+        error: "Invalid username",
+        details: usernameResult.error.format(),
+      },
+      400,
+    );
   }
+
+  const validatedUsername = usernameResult.data;
 
   // Validate query params
   const result = querySchema.safeParse({
@@ -139,64 +179,162 @@ app.get("/x-data/:username", async (c) => {
 
   const { postsLimit, delayBetweenPages, maxRetries } = result.data;
 
-  try {
-    const sessionId = `user-${username}-${Date.now()}`;
-    const baseURL = nitterPool.getHealthyInstance(sessionId);
+  let lastError: Error | null = null;
+  let partialData: any = null;
+  const minTweetsForPartial = Math.ceil(
+    postsLimit * PARTIAL_RESULTS_MIN_THRESHOLD,
+  );
 
-    const data = await jobLimiter.execute(async () => {
-      return await getXData(username, {
-        postsLimit,
-        delayBetweenPages,
-        maxRetries,
-        rateLimiter: nitterLimiter,
-        baseURL,
-        sessionId,
-        browserPool,
-      });
-    }, 1);
+  // Try up to MAX_INSTANCE_RETRIES different instances
+  for (let attempt = 0; attempt < MAX_INSTANCE_RETRIES; attempt++) {
+    let baseURL = "";
+    let timeoutOccurred = false;
 
-    const outDir = path.join(process.cwd(), "out");
-    await fs.mkdir(outDir, { recursive: true });
-
-    const outFile = path.join(outDir, `${username}.json`);
-    await fs.writeFile(outFile, JSON.stringify(data, null, 2), "utf8");
-
-    // Check if instance returned suspiciously low results (possible failure)
-    // If requested 100+ tweets but got 0, mark instance as problematic
-    if (postsLimit >= 50 && data.tweets.length === 0) {
-      console.warn(
-        `[App] Instance ${baseURL} returned 0 tweets for ${username}, marking as potentially failed`,
-      );
-      nitterPool.markInstanceFailed(baseURL, false);
-    }
-
-    // Mark instance as successful if we got good results
-    if (data.tweets.length > 0) {
-      nitterPool.markInstanceSuccess(baseURL);
-    }
-
-    // Return with metadata
-    return c.json({
-      ...data,
-      metadata: {
-        collected: data.tweets.length,
-        requested: postsLimit,
-        status: "complete",
-        instance: baseURL,
-      },
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-
-    // Mark instance as failed on error
     try {
-      const sessionId = `user-${username}-${Date.now()}`;
-      const baseURL = nitterPool.getHealthyInstance(sessionId);
-      nitterPool.markInstanceFailed(baseURL, false);
-    } catch {}
+      const sessionId = `user-${validatedUsername}-${Date.now()}`;
+      baseURL = nitterPool.getHealthyInstance(sessionId);
 
-    return c.json({ error: message }, 500);
+      console.log(
+        `[App] Attempt ${attempt + 1}/${MAX_INSTANCE_RETRIES} for ${validatedUsername} using ${baseURL}`,
+      );
+
+      // Create timeout promise
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          timeoutOccurred = true;
+          reject(new Error("SCRAPING_TIMEOUT"));
+        }, SCRAPING_TIMEOUT_MS);
+      });
+
+      // Create scraping promise with progress tracking
+      const scrapingPromise = jobLimiter.execute(async () => {
+        return await getXData(validatedUsername, {
+          postsLimit,
+          delayBetweenPages,
+          maxRetries,
+          rateLimiter: nitterLimiter,
+          baseURL,
+          sessionId,
+          browserPool,
+          onProgress: (currentData) => {
+            // Save partial data for timeout case
+            partialData = currentData;
+          },
+        });
+      }, 1);
+
+      // Race between scraping and timeout
+      const data = await Promise.race([scrapingPromise, timeoutPromise]);
+
+      // Success! Save file and return
+      await saveToFileIfEnabled(validatedUsername, data);
+
+      // Check if result is suspiciously empty (possible instance failure)
+      if (postsLimit >= 50 && data.tweets.length === 0) {
+        console.warn(
+          `[App] Instance ${baseURL} returned 0 tweets for ${validatedUsername}, marking as potentially failed`,
+        );
+        nitterPool.markInstanceFailed(baseURL, false);
+
+        // If this was first/second attempt, try another instance
+        if (attempt < MAX_INSTANCE_RETRIES - 1) {
+          lastError = new Error(`Instance returned 0 tweets`);
+          await new Promise((resolve) =>
+            setTimeout(resolve, INSTANCE_RETRY_DELAY_MS),
+          );
+          continue;
+        }
+      }
+
+      // Got good results - mark instance as successful
+      if (data.tweets.length > 0) {
+        nitterPool.markInstanceSuccess(baseURL);
+      }
+
+      return c.json({
+        ...data,
+        metadata: {
+          collected: data.tweets.length,
+          requested: postsLimit,
+          status: "complete",
+          instance: baseURL,
+          attempts: attempt + 1,
+        },
+      });
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+
+      // Check if timeout occurred with enough partial data
+      if (
+        timeoutOccurred &&
+        partialData &&
+        partialData.tweets &&
+        partialData.tweets.length >= minTweetsForPartial
+      ) {
+        console.warn(
+          `[App] Request timed out for ${validatedUsername}, returning partial results (${partialData.tweets.length}/${postsLimit})`,
+        );
+
+        await saveToFileIfEnabled(validatedUsername, partialData);
+
+        return c.json(
+          {
+            ...partialData,
+            metadata: {
+              collected: partialData.tweets.length,
+              requested: postsLimit,
+              status: "partial",
+              reason: "timeout",
+              instance: baseURL,
+              attempts: attempt + 1,
+            },
+          },
+          206,
+        ); // 206 Partial Content
+      }
+
+      // Mark failed instance
+      if (baseURL) {
+        const isRateLimit =
+          lastError.message.includes("429") ||
+          lastError.message.includes("rate limit");
+        nitterPool.markInstanceFailed(baseURL, isRateLimit);
+        console.error(
+          `[App] Attempt ${attempt + 1} failed with ${baseURL}:`,
+          lastError.message,
+        );
+      }
+
+      // If not last attempt, try next instance
+      if (attempt < MAX_INSTANCE_RETRIES - 1) {
+        console.log(
+          `[App] Retrying with different instance in ${INSTANCE_RETRY_DELAY_MS}ms...`,
+        );
+        await new Promise((resolve) =>
+          setTimeout(resolve, INSTANCE_RETRY_DELAY_MS),
+        );
+        continue;
+      }
+
+      // All attempts failed
+      break;
+    }
   }
+
+  // All instances failed
+  return c.json(
+    {
+      error: lastError?.message || "All Nitter instances failed",
+      metadata: {
+        collected: partialData?.tweets?.length || 0,
+        requested: postsLimit,
+        status: "failed",
+        instance: "all_failed",
+        attempts: MAX_INSTANCE_RETRIES,
+      },
+    },
+    500,
+  );
 });
 
 // Export resources for cleanup

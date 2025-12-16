@@ -38,6 +38,7 @@ type GetDataOptions = {
   sessionId?: string;
   baseURL?: string;
   browserPool?: BrowserPool;
+  onProgress?: (currentData: any) => void;
 };
 
 type InternalGetDataOptions = {
@@ -49,6 +50,7 @@ type InternalGetDataOptions = {
   sessionId?: string;
   baseURL: string;
   browserPool: BrowserPool;
+  onProgress?: (currentData: any) => void;
 };
 
 type TweetCollectionState = {
@@ -166,6 +168,15 @@ const collectTweetsFromPage = async (
         const tweets = parseTweets($, profile);
         addNewTweets(state, tweets);
 
+        // Report progress for timeout handling
+        if (options.onProgress) {
+          options.onProgress({
+            profile,
+            stats,
+            tweets: state.allTweets.slice(0, postsLimit),
+          });
+        }
+
         if (shouldStopCollection(state, postsLimit)) break;
 
         const pageInfo = await getPageInfo(page);
@@ -245,6 +256,7 @@ export const getXData = async (
     sessionId,
     baseURL = "https://nitter.net",
     browserPool,
+    onProgress,
   } = options;
 
   if (!browserPool) {
@@ -277,6 +289,7 @@ export const getXData = async (
       sessionId,
       baseURL,
       browserPool,
+      onProgress,
     });
 
     const parsed = schema.parse(data);

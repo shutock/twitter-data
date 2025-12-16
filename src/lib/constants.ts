@@ -25,3 +25,40 @@ export const BROWSER_POOL_SIZE = Number(env.BROWSER_POOL_SIZE ?? 5);
 export const NITTER_HEALTH_CHECK_INTERVAL = Number(
   env.NITTER_HEALTH_CHECK_INTERVAL ?? 300000,
 );
+
+// File Storage
+export const SAVE_TO_FILE = env.SAVE_TO_FILE !== "false";
+
+// Timeouts
+export const SCRAPING_TIMEOUT_MS = Number(env.SCRAPING_TIMEOUT_MS ?? 300000); // 5 minutes
+export const HEALTH_CHECK_TIMEOUT_MS = Number(
+  env.HEALTH_CHECK_TIMEOUT_MS ?? 8000,
+); // 8 seconds
+
+// Instance Management
+export const MAX_INSTANCE_RETRIES = Number(env.MAX_INSTANCE_RETRIES ?? 3);
+export const INSTANCE_RETRY_DELAY_MS = Number(
+  env.INSTANCE_RETRY_DELAY_MS ?? 1000,
+);
+
+// Partial Results
+export const PARTIAL_RESULTS_MIN_THRESHOLD = Number(
+  env.PARTIAL_RESULTS_MIN_THRESHOLD ?? 0.2,
+); // 20% minimum
+
+// Feature Flags
+export const ENABLE_THOROUGH_HEALTH_CHECKS =
+  env.ENABLE_THOROUGH_HEALTH_CHECKS !== "false";
+
+// User Agent
+export const DEFAULT_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36";
+
+// Resource Blocking
+export const BLOCKED_RESOURCE_TYPES = [
+  "image",
+  "font",
+  "stylesheet",
+  "media",
+  "other",
+];

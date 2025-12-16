@@ -1,3 +1,10 @@
+import * as cheerio from "cheerio";
+
+import {
+  ENABLE_THOROUGH_HEALTH_CHECKS,
+  HEALTH_CHECK_TIMEOUT_MS,
+} from "~/src/lib/constants";
+
 import type {
   HealthCheckResult,
   InstanceStatus,
@@ -175,9 +182,12 @@ export class NitterInstancePool {
     const startTime = Date.now();
 
     try {
-      // Try to fetch a test user profile with 5s timeout
+      // Fetch test user profile with configurable timeout
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const timeoutId = setTimeout(
+        () => controller.abort(),
+        HEALTH_CHECK_TIMEOUT_MS,
+      );
 
       const response = await fetch(`${url}/elonmusk`, {
         signal: controller.signal,
@@ -190,27 +200,91 @@ export class NitterInstancePool {
       clearTimeout(timeoutId);
 
       const responseTime = Date.now() - startTime;
-      const healthy = response.ok && response.status === 200;
 
-      // Basic validation: check if response looks like HTML
-      if (healthy) {
-        const contentType = response.headers.get("content-type") || "";
-        if (!contentType.includes("text/html")) {
+      if (!response.ok || response.status !== 200) {
+        return {
+          url,
+          healthy: false,
+          responseTime,
+          error: `HTTP ${response.status}`,
+        };
+      }
+
+      // If thorough health checks disabled, just check status code
+      if (!ENABLE_THOROUGH_HEALTH_CHECKS) {
+        return {
+          url,
+          healthy: true,
+          responseTime,
+        };
+      }
+
+      // Thorough check: Verify content contains tweets and is parseable
+      const html = await response.text();
+
+      // Try to parse the page to ensure parser works
+      try {
+        const $ = cheerio.load(html);
+
+        // Check for Nitter-specific HTML structure
+        const hasTimeline = $(".timeline").length > 0;
+        const hasTimelineItems = $(".timeline .timeline-item").length > 0;
+        const hasProfileCard = $(".profile-card").length > 0;
+
+        if (!hasTimeline || !hasTimelineItems || !hasProfileCard) {
           return {
             url,
             healthy: false,
             responseTime,
-            error: "Invalid content type",
+            error: `Missing structure: timeline=${hasTimeline}, items=${hasTimelineItems}, profile=${hasProfileCard}`,
           };
         }
-      }
 
-      return {
-        url,
-        healthy,
-        responseTime,
-        error: healthy ? undefined : `HTTP ${response.status}`,
-      };
+        const tweetCount = $(".timeline .timeline-item").length;
+
+        if (tweetCount === 0) {
+          return {
+            url,
+            healthy: false,
+            responseTime,
+            error: "No tweets found in timeline",
+          };
+        }
+
+        // Try to parse profile to ensure parser works
+        const profileUsername = $(".profile-card-username")
+          .first()
+          .text()
+          .trim()
+          .replace(/^@/, "");
+
+        if (!profileUsername || profileUsername.length === 0) {
+          return {
+            url,
+            healthy: false,
+            responseTime,
+            error: "Failed to parse profile username",
+          };
+        }
+
+        // Instance is fully functional
+        console.log(
+          `[NitterPool] Health check passed for ${url}: ${tweetCount} tweets, username: ${profileUsername}`,
+        );
+
+        return {
+          url,
+          healthy: true,
+          responseTime,
+        };
+      } catch (parseError) {
+        return {
+          url,
+          healthy: false,
+          responseTime,
+          error: `Parse error: ${parseError instanceof Error ? parseError.message : "unknown"}`,
+        };
+      }
     } catch (error) {
       const responseTime = Date.now() - startTime;
       return {
