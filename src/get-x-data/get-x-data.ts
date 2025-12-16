@@ -4,6 +4,14 @@ import { type Browser } from "puppeteer";
 import { z } from "zod";
 
 import type { RateLimiter } from "~/src/lib/rate-limiter";
+import {
+  DELAY_BETWEEN_PAGES,
+  RATE_LIMITER_MAX_CONCURRENT,
+  RATE_LIMITER_MAX_RETRIES,
+  RATE_LIMITER_REQUESTS_PER_SECOND,
+  RATE_LIMITER_RETRY_DELAY,
+  RATE_LIMITER_TIMEOUT,
+} from "~/src/lib/constants";
 import { createRateLimiter } from "~/src/lib/rate-limiter";
 
 import { schema } from "./schema";
@@ -191,7 +199,7 @@ export const getXData = async (
   const {
     ora,
     postsLimit = 100,
-    delayBetweenPages = 2000,
+    delayBetweenPages = DELAY_BETWEEN_PAGES,
     maxRetries = 3,
     sessionId,
   } = options;
@@ -199,8 +207,14 @@ export const getXData = async (
   const rateLimiter =
     options.rateLimiter ||
     createRateLimiter({
-      requestsPerSecond: 1000 / delayBetweenPages,
-      timeout: 300000, // 5 minutes to allow for retries
+      requestsPerSecond: Math.min(
+        1000 / delayBetweenPages,
+        RATE_LIMITER_REQUESTS_PER_SECOND,
+      ),
+      maxConcurrent: RATE_LIMITER_MAX_CONCURRENT,
+      maxRetries: RATE_LIMITER_MAX_RETRIES,
+      retryDelay: RATE_LIMITER_RETRY_DELAY,
+      timeout: RATE_LIMITER_TIMEOUT,
     });
 
   const url = new URL(username, baseURL).toString();

@@ -6,6 +6,11 @@ import {
   DELAY_BETWEEN_PAGES,
   MAX_RETRIES,
   POSTS_LIMIT,
+  RATE_LIMITER_MAX_CONCURRENT,
+  RATE_LIMITER_MAX_RETRIES,
+  RATE_LIMITER_REQUESTS_PER_SECOND,
+  RATE_LIMITER_RETRY_DELAY,
+  RATE_LIMITER_TIMEOUT,
 } from "~/src/lib/constants";
 import { createRateLimiter } from "~/src/lib/rate-limiter";
 
@@ -27,11 +32,11 @@ const jobLimiter = createRateLimiter({
 
 // Limiter for Nitter API requests (rate limits)
 const nitterLimiter = createRateLimiter({
-  requestsPerSecond: 2,
-  maxConcurrent: 2, // Per session limit
-  maxRetries: 3,
-  retryDelay: 2000,
-  timeout: 120000,
+  requestsPerSecond: RATE_LIMITER_REQUESTS_PER_SECOND,
+  maxConcurrent: RATE_LIMITER_MAX_CONCURRENT,
+  maxRetries: RATE_LIMITER_MAX_RETRIES,
+  retryDelay: RATE_LIMITER_RETRY_DELAY,
+  timeout: RATE_LIMITER_TIMEOUT,
   onError: (error, retries) => {
     console.error(`[NitterLimiter] Error (retry ${retries}):`, error.message);
   },

@@ -7,7 +7,7 @@ import { createRateLimiter } from "~/src/lib/rate-limiter";
 
 const usernames = ["elonmusk", "BillGates", "BarackObama", "NASA", "SpaceX"];
 
-const postsLimit = 50;
+const postsLimit = 1000;
 const delayBetweenPages = 4000;
 const maxRetries = 3;
 
@@ -89,3 +89,5 @@ try {
   loader.fail(message);
   console.error(error);
 }
+
+process.exit(0);
