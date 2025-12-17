@@ -16,7 +16,7 @@ const DEFAULT_INSTANCES = [
   "https://nitter.privacyredirect.com", // 🇫🇮 94% uptime, RSS - RELIABLE
   // "https://xcancel.com", // 🇺🇸 98% uptime, 711ms avg - DOWN (503)
   // "https://nitter.poast.org", // 🇺🇸 85% uptime - UNRELIABLE
-  // "https://nitter.net", // 🇳🇱 Official, 94% uptime - INCONSISTENT (returns partial results)
+  "https://nitter.net", // 🇳🇱 Official, 94% uptime - INCONSISTENT (returns partial results)
   // "https://nuku.trabun.org", // 🇨🇱 95% uptime - UNRELIABLE
   // "https://nitter.space", // 🇺🇸 96% uptime - UNRELIABLE
   // "https://lightbrd.com", // 🇹🇷 95% uptime - UNRELIABLE
