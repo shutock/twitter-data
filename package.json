@@ -1,12 +1,11 @@
 {
   "name": "x-data-scrapper",
   "author": "shutock <yo@shutock.com>",
-  "module": "index.ts",
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "bun index.ts",
-    "dev": "bun --watch index.ts",
+    "start": "bun src/index.ts",
+    "dev": "bun --watch src/index.ts",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,css,scss,md}\"",
     "test": "bun test",
     "docker:build": "docker compose build",
