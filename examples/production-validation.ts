@@ -1,25 +1,91 @@
-/**
- * Test script for production improvements
- */
+import ora from "ora";
 
-const baseUrl = "http://localhost:1337";
+const BASE_URL = "http://localhost:1337";
 
-console.log("🧪 Testing Production Improvements\n");
+type XDataResponse = {
+  profile: {
+    username: string;
+    name?: string;
+    bio?: string;
+    profile_link: string;
+    profile_photo_url?: string;
+    cover_photo_url?: string;
+    registration_date: string;
+    verification?: "blue" | "business";
+  };
+  stats: {
+    tweets: number;
+    following: number;
+    followers: number;
+    likes: number;
+  };
+  tweets: Array<{
+    author: {
+      username: string;
+      name?: string;
+      profile_photo_url?: string;
+      verification?: "blue" | "business";
+    };
+    content: string;
+    url: string;
+    created_at: string;
+    metrics: {
+      comments: number;
+      retweets: number;
+      quotes: number;
+      likes: number;
+      views: number;
+    };
+    kind: "tweet" | "retweet" | "quote";
+  }>;
+  metadata: {
+    requested: number;
+    collected: number;
+    status: string;
+    instance: string;
+    attempts?: number;
+  };
+  error?: string;
+};
 
-// Test 1: Multi-instance retry (5 concurrent requests)
+type HealthResponse = {
+  status: string;
+  timestamp: string;
+  uptime: number;
+  nitterInstances: {
+    total: number;
+    healthy: number;
+    instances: Array<{
+      url: string;
+      status: string;
+      lastCheck: string;
+    }>;
+  };
+  browserPool: {
+    completedTasks: number;
+    failedTasks: number;
+  };
+};
+
+console.log("🧪 Production Validation Suite\n");
+
 console.log("Test 1: Multi-instance retry & concurrent requests");
 const usernames = ["0xNomis", "unchase12", "nasa", "eeftp", "artyshatilov"];
 const tweetsLimit = 100;
+
+const spinner = ora(
+  `Testing concurrent requests for ${usernames.length} users...`,
+).start();
 
 const startTime = Date.now();
 
 const results = await Promise.all(
   usernames.map(async (username) => {
     try {
-      const url = new URL(`x-data/${username}`, baseUrl);
+      const url = new URL(`x-data/${username}`, BASE_URL);
       url.searchParams.append("tweetsLimit", tweetsLimit.toString());
       const res = await fetch(url);
-      const data = (await res.json()) as any;
+      const data = (await res.json()) as XDataResponse;
 
       if (data.error) {
         return {
@@ -42,14 +108,16 @@ const results = await Promise.all(
         username,
         status: "error",
         error: error instanceof Error ? error.message : String(error),
+        metadata: undefined,
       };
     }
   }),
 );
 
 const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+spinner.succeed(`Requests completed in ${duration}s`);
 
-console.log(`\n📊 Results (completed in ${duration}s):\n`);
+console.log(`\n📊 Results:`);
 
 results.forEach((item) => {
   if (item.status === "error") {
@@ -68,29 +136,27 @@ results.forEach((item) => {
   }
 });
 
-// Calculate success rate
 const successful = results.filter((r) => r.status !== "error").length;
 const successRate = ((successful / results.length) * 100).toFixed(1);
 console.log(
   `\n✅ Success Rate: ${successful}/${results.length} (${successRate}%)`,
 );
 
-// Test 2: Invalid username validation
 console.log("\n\nTest 2: Username validation");
 const invalidUsernames = ["user@domain", "user-with-dash", "a".repeat(20)];
 
 for (const invalidUser of invalidUsernames) {
-  const url = new URL(`x-data/${encodeURIComponent(invalidUser)}`, baseUrl);
+  const spinner = ora(`Testing invalid user: ${invalidUser}`).start();
+  const url = new URL(`x-data/${encodeURIComponent(invalidUser)}`, BASE_URL);
   const res = await fetch(url);
 
   if (res.status === 400) {
-    console.log(`  ✅ "${invalidUser}" rejected (400)`);
+    spinner.succeed(`"${invalidUser}" rejected (400)`);
   } else {
-    console.log(`  ❌ "${invalidUser}" accepted (should be rejected!)`);
+    spinner.fail(`"${invalidUser}" accepted (should be rejected!)`);
   }
 }
 
-// Test 3: Invalid query params
 console.log("\n\nTest 3: Query parameter validation");
 const invalidParams = [
   { tweetsLimit: 10000, expected: "rejected" },
@@ -99,7 +165,8 @@ const invalidParams = [
 ];
 
 for (const params of invalidParams) {
-  const url = new URL("x-data/nasa", baseUrl);
+  const spinner = ora(`Testing params: ${JSON.stringify(params)}`).start();
+  const url = new URL("x-data/nasa", BASE_URL);
   if (params.tweetsLimit !== undefined)
     url.searchParams.append("tweetsLimit", String(params.tweetsLimit));
   if (params.delayBetweenPages !== undefined)
@@ -112,20 +179,20 @@ for (const params of invalidParams) {
   const status = res.status === 400 ? "rejected" : "accepted";
 
   if (status === params.expected) {
-    console.log(`  ✅ ${JSON.stringify(params)} → ${status}`);
+    spinner.succeed(`${JSON.stringify(params)} → ${status}`);
   } else {
-    console.log(
-      `  ❌ ${JSON.stringify(params)} → ${status} (expected ${params.expected})`,
+    spinner.fail(
+      `${JSON.stringify(params)} → ${status} (expected ${params.expected})`,
     );
   }
 }
 
-// Test 4: Health endpoint
 console.log("\n\nTest 4: Health endpoint");
-const healthRes = await fetch(`${baseUrl}/health`);
-const healthData = (await healthRes.json()) as any;
+const healthSpinner = ora("Checking health endpoint...").start();
+const healthRes = await fetch(`${BASE_URL}/health`);
+const healthData = (await healthRes.json()) as HealthResponse;
+healthSpinner.succeed(`Status: ${healthData.status}`);
 
-console.log(`  Status: ${healthData.status}`);
 console.log(
   `  Instances: ${healthData.nitterInstances.healthy}/${healthData.nitterInstances.total} healthy`,
 );
