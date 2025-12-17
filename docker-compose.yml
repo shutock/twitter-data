@@ -14,6 +14,6 @@ services:
     volumes:
       - ./out:/app/out
     restart: unless-stopped
-    mem_limit: 2g
+    mem_limit: 4g
     cpus: 2
     shm_size: 2gb
