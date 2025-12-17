@@ -167,9 +167,7 @@ const parseBaseTweet = (
       retweets: extractStatValue(statsRoot, "icon-retweet"),
       quotes: extractStatValue(statsRoot, "icon-quote"),
       likes: extractStatValue(statsRoot, "icon-heart"),
-      views:
-        extractStatValue(statsRoot, "icon-view") ||
-        extractStatValue(statsRoot, "icon-play"),
+      views: extractStatValue(statsRoot, "icon-views"),
     },
   };
 };
