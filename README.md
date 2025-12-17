@@ -275,27 +275,50 @@ NITTER_HEALTH_CHECK_INTERVAL="300000"  # 5 minutes
 
 See `.env.example` for all options.
 
-## 🧪 Testing
+## 🧪 Examples & Testing
 
 ### Run Tests
 
 ```bash
 # All unit tests (82 tests)
 bun test
+```
 
-# Comprehensive production tests
-bun test-improvements
+### Examples
 
-# Example demos
-bun run examples/simple-demo
-bun run examples/rate-limiter-demo
+The project includes several example scripts to demonstrate functionality and test different scenarios. All examples use `fetch` requests and include visual progress indicators.
+
+```bash
+# 1. Basic Fetch (Single User)
+# Fetches profile and 100 tweets for a single user
+bun run examples/basic-fetch.ts
+
+# 2. Concurrent Requests
+# Tests performance with 10 simultaneous requests
+bun run examples/concurrent-requests.ts
+
+# 3. Health & Metrics Check
+# Validates /health and /metrics endpoints
+bun run examples/health-check.ts
+
+# 4. Large Dataset Fetch
+# Fetches 500 tweets to test pagination and stability
+bun run examples/large-dataset.ts
+
+# 5. Error Handling Test
+# Tests 10 different error scenarios (invalid users, bad params)
+bun run examples/error-handling.ts
+
+# 6. Production Validation
+# Comprehensive suite testing retries, validation, and health
+bun run examples/production-validation.ts
 ```
 
 ### Test Results
 
 ```
 ✅ 82 unit tests passing
-✅ 100% success rate (5/5 users)
+✅ 100% success rate on examples
 ✅ All validation tests passing
 ✅ All error handling tests passing
 ```
