@@ -2,15 +2,15 @@ import { z } from "zod";
 
 export const generalProfileSchema = z.object({
   username: z.string(),
-  verification: z.enum(["blue", "business"]).optional(),
-  name: z.string().optional(),
-  profile_photo_url: z.string().optional(),
+  verification: z.enum(["blue", "business", "government"]).nullable(),
+  name: z.string().nullable(),
+  profile_photo_url: z.string().nullable(),
 });
 
 export const profileSchema = generalProfileSchema.extend({
-  bio: z.string().optional(),
+  bio: z.string().nullable(),
   profile_link: z.string(),
-  cover_photo_url: z.string().optional(),
+  cover_photo_url: z.string().nullable(),
   registration_date: z.string(),
 });
 

@@ -1,10 +1,11 @@
+import type z from "zod";
 import * as cheerio from "cheerio";
 
 type Author = {
   username: string;
-  verification?: "business" | "blue";
-  name?: string;
-  profile_photo_url?: string;
+  verification: Profile["verification"];
+  name: string | null;
+  profile_photo_url: string | null;
 };
 
 type TweetMetrics = {
@@ -30,12 +31,12 @@ type Tweet = BaseTweet & {
 
 type Profile = {
   username: string;
-  verification?: "business" | "blue";
-  name?: string;
-  profile_photo_url?: string;
-  bio?: string;
+  verification: "business" | "blue" | "government" | null;
+  name: string | null;
+  profile_photo_url: string | null;
+  bio: string | null;
   profile_link: string;
-  cover_photo_url?: string;
+  cover_photo_url: string | null;
   registration_date: string;
 };
 
@@ -49,13 +50,13 @@ type Stats = {
 export const createAbsoluteUrl = (
   url?: string | null,
   baseURL?: string,
-): string | undefined => {
-  if (!url) return undefined;
+): string | null => {
+  if (!url) return null;
   if (!baseURL) return url; // If no baseURL, return as-is (might already be absolute)
   try {
     return new URL(url, baseURL).toString();
   } catch {
-    return undefined;
+    return null;
   }
 };
 
@@ -72,33 +73,30 @@ export const extractNumber = (text: string): number => {
 
 export const extractVerification = (
   element: cheerio.Cheerio<any>,
-): "business" | "blue" | undefined => {
+): Profile["verification"] => {
   const className = element.find(".verified-icon").attr("class") || "";
+  if (className.includes("government")) return "government";
   if (className.includes("business")) return "business";
   if (className.includes("blue")) return "blue";
-  return undefined;
+  return null;
 };
 
 export const parseProfile = (
   $: cheerio.CheerioAPI,
   baseURL?: string,
 ): Profile => {
-  const bannerStyle = $(".profile-banner a").attr("style") || "";
-  const coverMatch = bannerStyle.match(/url\(([^)]+)\)/);
-  const cover_photo_url = coverMatch
-    ? createAbsoluteUrl(coverMatch[1], baseURL)
-    : undefined;
-
   return {
     username: extractText($, ".profile-card-username").replace(/^@/, ""),
     verification: extractVerification($(".profile-card-fullname")),
-    name: extractText($, ".profile-card-fullname") || undefined,
+    name: extractText($, ".profile-card-fullname") || null,
     profile_photo_url:
       createAbsoluteUrl($(".profile-card-avatar img").attr("src"), baseURL) ||
-      undefined,
-    bio: extractText($, ".profile-bio") || undefined,
+      null,
+    bio: extractText($, ".profile-bio") || null,
     profile_link: $(".profile-website a").attr("href") || "",
-    cover_photo_url,
+    cover_photo_url:
+      createAbsoluteUrl($(".profile-banner a img").attr("src"), baseURL) ||
+      null,
     registration_date:
       $(".profile-joindate span").attr("title") ||
       extractText($, ".profile-joindate"),
@@ -126,10 +124,10 @@ const parseAuthor = (root: cheerio.Cheerio<any>, baseURL?: string): Author => {
   return {
     username: root.find(".username").first().text().trim().replace(/^@/, ""),
     verification: extractVerification(root),
-    name: root.find(".fullname").first().text().trim() || undefined,
+    name: root.find(".fullname").first().text().trim() || null,
     profile_photo_url:
       createAbsoluteUrl(root.find(".tweet-avatar img").attr("src"), baseURL) ||
-      undefined,
+      null,
   };
 };
 
@@ -184,9 +182,9 @@ const parseQuoteTweet = (
   const qAuthor: Author = {
     username: qHeader.find(".username").first().text().trim().replace(/^@/, ""),
     verification: extractVerification(qHeader),
-    name: qHeader.find(".fullname").first().text().trim() || undefined,
+    name: qHeader.find(".fullname").first().text().trim() || null,
     profile_photo_url:
-      createAbsoluteUrl(qHeader.find("img").attr("src"), baseURL) || undefined,
+      createAbsoluteUrl(qHeader.find("img").attr("src"), baseURL) || null,
   };
 
   const qUrl =
