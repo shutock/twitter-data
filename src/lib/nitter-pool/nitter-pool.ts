@@ -13,7 +13,7 @@ import type {
 } from "./types";
 
 const DEFAULT_INSTANCES = [
-  "https://nitter.dashy.a3x.dn.nyx.im",
+  // "https://nitter.dashy.a3x.dn.nyx.im",
   "https://nitter.privacyredirect.com",
   "https://nitter.tiekoetter.com",
   "https://nitter.net",
