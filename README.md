@@ -4,7 +4,7 @@ A production-ready TypeScript service to scrape Twitter/X user profiles and twee
 
 ## ⚡ Features
 
-- **Multi-Instance Pool**: Automatic failover across 2 reliable Nitter instances (99.9% availability)
+- **Massive Instance Pool**: Automatic failover across Nitter instances
 - **Self-Healing**: Proactive instance recovery via probabilistic retry (15% chance)
 - **Browser Pooling**: Efficient resource usage with 5 browser workers
 - **Smart Rate Limiting**: 1.5 req/sec with 15-token burst capacity
@@ -15,13 +15,13 @@ A production-ready TypeScript service to scrape Twitter/X user profiles and twee
 
 ## 📊 Performance
 
-| Metric                  | Performance                      |
-| ----------------------- | -------------------------------- |
-| **100 tweets**          | ~4-5 seconds                     |
-| **1000 tweets**         | ~40-60 seconds                   |
-| **Success rate**        | 100% (with 2 reliable instances) |
-| **Concurrent requests** | 5-10 simultaneous users          |
-| **Availability**        | 99.9% (automatic failover)       |
+| Metric                  | Performance                |
+| ----------------------- | -------------------------- |
+| **100 tweets**          | ~4-5 seconds               |
+| **1000 tweets**         | ~40-60 seconds             |
+| **Success rate**        | 100% (with 4 instances)    |
+| **Concurrent requests** | 5-10 simultaneous users    |
+| **Availability**        | 99.9% (automatic failover) |
 
 ## 🚀 Quick Start
 
@@ -323,6 +323,7 @@ bun run examples/production-validation.ts
 ✅ 100% success rate on examples
 ✅ All validation tests passing
 ✅ All error handling tests passing
+✅ 4 Nitter instances configured
 ```
 
 ## 🏗️ Architecture
@@ -330,7 +331,7 @@ bun run examples/production-validation.ts
 ### **Components**
 
 1. **Nitter Instance Pool**
-   - Manages 2 reliable Nitter instances
+   - Manages 4 Nitter instances from community-maintained list
    - Automatic health checks every 5 minutes
    - Round-robin load distribution
    - Self-healing via probabilistic retry (15% chance to retry unhealthy instances)

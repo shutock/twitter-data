@@ -13,15 +13,10 @@ import type {
 } from "./types";
 
 const DEFAULT_INSTANCES = [
-  "https://nitter.tiekoetter.com", // 🇩🇪 94% uptime, 15ms avg - RELIABLE
-  "https://nitter.privacyredirect.com", // 🇫🇮 94% uptime, RSS - RELIABLE
-  // "https://xcancel.com", // 🇺🇸 98% uptime, 711ms avg - DOWN (503)
-  // "https://nitter.poast.org", // 🇺🇸 85% uptime - UNRELIABLE
-  "https://nitter.net", // 🇳🇱 Official, 94% uptime - INCONSISTENT (returns partial results)
-  // "https://nuku.trabun.org", // 🇨🇱 95% uptime - UNRELIABLE
-  // "https://nitter.space", // 🇺🇸 96% uptime - UNRELIABLE
-  // "https://lightbrd.com", // 🇹🇷 95% uptime - UNRELIABLE
-  // "https://nitter.catsarch.com", // 🇺🇸/🇩🇪 56% uptime (backup) - VERY UNRELIABLE
+  "https://nitter.dashy.a3x.dn.nyx.im",
+  "https://nitter.privacyredirect.com",
+  "https://nitter.tiekoetter.com",
+  "https://nitter.net",
 ];
 
 export class NitterInstancePool {
@@ -51,7 +46,6 @@ export class NitterInstancePool {
       `[NitterPool] Initializing pool with ${this.instances.size} instances...`,
     );
 
-    // Run parallel health checks on all instances (5s timeout each)
     await this.refreshHealthChecks();
 
     const healthyCount = Array.from(this.instances.values()).filter(
@@ -77,7 +71,6 @@ export class NitterInstancePool {
 
     const candidateInstances = Array.from(this.instances.values()).filter(
       (instance) => {
-        // Filter out rate-limited instances that haven't cooled down
         if (
           instance.status === "rate_limited" &&
           instance.rateLimitedUntil &&
@@ -86,7 +79,6 @@ export class NitterInstancePool {
           return false;
         }
 
-        // Include unhealthy instances only probabilistically or when no healthy ones exist
         if (instance.status === "unhealthy" && !shouldRetryUnhealthy) {
           return false;
         }
@@ -101,7 +93,6 @@ export class NitterInstancePool {
       );
     }
 
-    // Round-robin selection
     const selectedInstance =
       candidateInstances[this.currentIndex % candidateInstances.length];
 
@@ -111,7 +102,6 @@ export class NitterInstancePool {
 
     this.currentIndex = (this.currentIndex + 1) % candidateInstances.length;
 
-    // Log if we're retrying an unhealthy instance
     if (selectedInstance.status === "unhealthy") {
       console.warn(
         `[NitterPool] Retrying unhealthy instance ${selectedInstance.url} (${UNHEALTHY_INSTANCE_RETRY_PROBABILITY * 100}% chance)`,
@@ -129,7 +119,6 @@ export class NitterInstancePool {
 
     if (isRateLimit) {
       instance.status = "rate_limited";
-      // Set cooldown: 90 seconds + random jitter (0-20s)
       const cooldownMs = (90 + Math.random() * 20) * 1000;
       instance.rateLimitedUntil = Date.now() + cooldownMs;
 
@@ -152,22 +141,18 @@ export class NitterInstancePool {
     const instance = this.instances.get(url);
     if (!instance) return;
 
-    // Reset failure counter
     instance.consecutiveFailures = 0;
 
-    // Update status if it was rate-limited or unhealthy
     if (instance.status !== "healthy") {
       console.log(`[NitterPool] Instance ${url} recovered, marking healthy`);
       instance.status = "healthy";
       instance.rateLimitedUntil = null;
     }
 
-    // Update average response time
     if (responseTime !== undefined) {
       if (instance.avgResponseTime === 0) {
         instance.avgResponseTime = responseTime;
       } else {
-        // Exponential moving average
         instance.avgResponseTime =
           instance.avgResponseTime * 0.8 + responseTime * 0.2;
       }
@@ -196,7 +181,6 @@ export class NitterInstancePool {
     const startTime = Date.now();
 
     try {
-      // Fetch test user profile with configurable timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(
         () => controller.abort(),
@@ -224,7 +208,6 @@ export class NitterInstancePool {
         };
       }
 
-      // If thorough health checks disabled, just check status code
       if (!ENABLE_THOROUGH_HEALTH_CHECKS) {
         return {
           url,
@@ -233,14 +216,11 @@ export class NitterInstancePool {
         };
       }
 
-      // Thorough check: Verify content contains tweets and is parseable
       const html = await response.text();
 
-      // Try to parse the page to ensure parser works
       try {
         const $ = cheerio.load(html);
 
-        // Check for Nitter-specific HTML structure
         const hasTimeline = $(".timeline").length > 0;
         const hasTimelineItems = $(".timeline .timeline-item").length > 0;
         const hasProfileCard = $(".profile-card").length > 0;
@@ -265,7 +245,6 @@ export class NitterInstancePool {
           };
         }
 
-        // Try to parse profile to ensure parser works
         const profileUsername = $(".profile-card-username")
           .first()
           .text()
@@ -281,7 +260,6 @@ export class NitterInstancePool {
           };
         }
 
-        // Instance is fully functional
         console.log(
           `[NitterPool] Health check passed for ${url}: ${tweetCount} tweets, username: ${profileUsername}`,
         );
@@ -313,7 +291,6 @@ export class NitterInstancePool {
   private async refreshHealthChecks(): Promise<void> {
     const urls = Array.from(this.instances.keys());
 
-    // Run health checks in parallel
     const results = await Promise.all(urls.map((url) => this.healthCheck(url)));
 
     for (const result of results) {
@@ -323,13 +300,11 @@ export class NitterInstancePool {
       instance.lastChecked = Date.now();
 
       if (result.healthy) {
-        // Reset failures and mark healthy
         instance.consecutiveFailures = 0;
         instance.status = "healthy";
         instance.rateLimitedUntil = null;
         instance.avgResponseTime = result.responseTime;
       } else {
-        // Increment failures
         instance.consecutiveFailures++;
 
         if (instance.consecutiveFailures >= this.maxConsecutiveFailures) {
@@ -345,7 +320,6 @@ export class NitterInstancePool {
 
   startPeriodicHealthChecks(intervalMs: number = 300000): void {
     if (this.healthCheckInterval) {
-      return; // Already started
     }
 
     console.log(
